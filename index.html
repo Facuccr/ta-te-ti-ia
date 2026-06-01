@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <title>Tres en Raya vs IA</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.0.0/dist/tf.min.js"></script>
+    <style>
+      body {
+        font-family: sans-serif;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        background-color: #f4f4f9;
+      }
+      #board {
+        display: grid;
+        grid-template-columns: repeat(3, 100px);
+        gap: 5px;
+        margin-top: 20px;
+        background-color: #333;
+        padding: 5px;
+        border-radius: 5px;
+      }
+      .cell {
+        width: 100px;
+        height: 100px;
+        background: #fff;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        font-size: 4rem;
+        cursor: pointer;
+        user-select: none;
+      }
+      .cell:hover {
+        background-color: #e0e0e0;
+      }
+      .cell.disabled {
+        cursor: not-allowed;
+      }
+      #status {
+        margin-top: 20px;
+        font-weight: bold;
+        font-size: 1.5rem;
+      }
+      button {
+        margin-top: 20px;
+        padding: 10px 20px;
+        font-size: 1rem;
+        cursor: pointer;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Tres en Raya contra la IA</h1>
+    <p>Tú juegas con "O" (Humano) y la IA juega con "X".</p>
+
+    <div id="status">Cargando modelo...</div>
+    <div id="board"></div>
+    <button id="resetBtn" style="display: none" onclick="resetGame()">
+      Reiniciar Juego
+    </button>
+
+    <script>
+      let model;
+      // El modelo del libro asume: 1 para el jugador actual (IA), -1 para el oponente (Humano), 0 vacío.
+      let boardState = [0, 0, 0, 0, 0, 0, 0, 0, 0];
+      let gameOver = true;
+
+      // 1. Construir la cuadrícula en el HTML
+      const boardElement = document.getElementById("board");
+      for (let i = 0; i < 9; i++) {
+        const cell = document.createElement("div");
+        cell.className = "cell disabled";
+        cell.id = `cell-${i}`;
+        cell.onclick = () => humanPlay(i);
+        boardElement.appendChild(cell);
+      }
+
+      // 2. Cargar el modelo usando la metodología del libro
+      tf.ready().then(() => {
+        const modelPath = "model/ttt_model.json";
+        tf.loadLayersModel(modelPath).then((loadedModel) => {
+          model = loadedModel;
+          gameOver = false;
+          document.getElementById("status").innerText =
+            "Modelo cargado. ¡Tu turno!";
+          enableBoard();
+        });
+      });
+
+      function enableBoard() {
+        document
+          .querySelectorAll(".cell")
+          .forEach((cell) => cell.classList.remove("disabled"));
+      }
+
+      function renderBoard() {
+        for (let i = 0; i < 9; i++) {
+          const cell = document.getElementById(`cell-${i}`);
+          if (boardState[i] === -1) {
+            cell.innerText = "O";
+            cell.style.color = "blue";
+          } else if (boardState[i] === 1) {
+            cell.innerText = "X";
+            cell.style.color = "red";
+          } else {
+            cell.innerText = "";
+          }
+        }
+      }
+
+      // 3. Lógica del turno del Humano
+      function humanPlay(index) {
+        // Evitar jugar en casillas ocupadas o si el juego terminó
+        if (gameOver || boardState[index] !== 0) return;
+
+        boardState[index] = -1; // -1 representa al oponente (Humano)
+        renderBoard();
+
+        if (checkWin(-1)) {
+          endGame("¡Felicidades, le ganaste a la IA!");
+          return;
+        }
+        if (checkDraw()) {
+          endGame("¡Es un empate!");
+          return;
+        }
+
+        document.getElementById("status").innerText = "La IA está pensando...";
+        // Pequeño retardo para permitir que el DOM se actualice antes de que la IA bloquee el hilo
+        setTimeout(aiPlay, 50);
+      }
+
+      // 4. Lógica de predicción de la IA usando TensorFlow.js
+      function aiPlay() {
+        if (gameOver) return;
+
+        // tf.tidy limpia la memoria de los tensores intermedios (Método del libro)
+        tf.tidy(() => {
+          // Convertimos el estado a un tensor 2D de forma [1, 9] (1 ejemplo, 9 características)
+          const input = tf.tensor2d([boardState]);
+
+          // Predecimos las probabilidades para cada casilla
+          const result = model.predict(input);
+          const predictions = result.dataSync();
+
+          // Lógica de enmascaramiento: buscamos la predicción más alta SÓLO en casillas vacías
+          let bestMove = -1;
+          let highestProb = -Infinity;
+
+          for (let i = 0; i < 9; i++) {
+            if (boardState[i] === 0 && predictions[i] > highestProb) {
+              highestProb = predictions[i];
+              bestMove = i;
+            }
+          }
+
+          // Ejecutar la mejor jugada
+          if (bestMove !== -1) {
+            boardState[bestMove] = 1; // 1 representa a la IA
+          }
+        });
+
+        renderBoard();
+
+        if (checkWin(1)) {
+          endGame("¡La IA ha ganado!");
+          return;
+        }
+        if (checkDraw()) {
+          endGame("¡Es un empate!");
+          return;
+        }
+
+        document.getElementById("status").innerText = "¡Tu turno!";
+      }
+
+      // Funciones de utilidad para el juego
+      function checkWin(player) {
+        const winPatterns = [
+          [0, 1, 2],
+          [3, 4, 5],
+          [6, 7, 8], // Filas horizontales
+          [0, 3, 6],
+          [1, 4, 7],
+          [2, 5, 8], // Columnas verticales
+          [0, 4, 8],
+          [2, 4, 6], // Diagonales
+        ];
+        return winPatterns.some((pattern) =>
+          pattern.every((index) => boardState[index] === player),
+        );
+      }
+
+      function checkDraw() {
+        return boardState.every((cell) => cell !== 0);
+      }
+
+      function endGame(message) {
+        gameOver = true;
+        document.getElementById("status").innerText = message;
+        document.getElementById("resetBtn").style.display = "block";
+        document
+          .querySelectorAll(".cell")
+          .forEach((cell) => cell.classList.add("disabled"));
+      }
+
+      function resetGame() {
+        boardState = [0, 0, 0, 0, 0, 0, 0, 0, 0];
+        gameOver = false;
+        document.getElementById("status").innerText = "¡Tu turno!";
+        document.getElementById("resetBtn").style.display = "none";
+        renderBoard();
+        enableBoard();
+      }
+    </script>
+  </body>
+</html>
